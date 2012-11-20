@@ -15,10 +15,17 @@ public class UserRank {
 	private ResultSet resultSet = null;
 	private double start_time = 0;
 	private double end_time = 0;
-	private double like_e = 0.5;
-	private double comment_e = 0.33;
-	private double post_wall_e = 0.17;
+	public double action_like = 0.5;
+	public double action_comment = 0.33;
+	public double action_post_wall = 0.17;
+	private double friend_related = 1;
 	
+	public boolean useActionLike = true;
+	public boolean useActionComment = true;
+	public boolean useActionWallPost = true;
+	public boolean useTimeDecay = true;
+	
+	public double total_time = 0;
 	
 	public void execute() throws Exception {
 		start_time = getCurrentTime();
@@ -32,12 +39,14 @@ public class UserRank {
 		// create all value for calculating user rank
 		createTableUserRank();
 		
+		createTableFullRelatedUser();
 		createTableRelatedUser();
 		
 		initTableUserRank();    		
 		initTableRelatedUser();
 		
-		removeRelatedThemSelves();
+		
+		//removeRelatedThemSelves();
 		
 		updateValueUserRank();   		
 		
@@ -57,13 +66,13 @@ public class UserRank {
 		// call reset init value of users who have none like
 		resetValueOfUserNoneLikeIsTrue();
 		
+		
 		// close database
 		close();
 		
 		end_time = getCurrentTime();
 		
-		double total_time = end_time - start_time;
-		System.out.println("total time is : " + total_time + " seconds");
+		total_time = end_time - start_time;
 	}
 	
 	/**
@@ -103,6 +112,9 @@ public class UserRank {
   		String sql = "DROP TABLE IF EXISTS `younet_me`.`engine4_user_rank`;";
    		statement.executeUpdate(sql);
   		
+   		sql = "DROP TABLE IF EXISTS `younet_me`.`engine4_full_related_user`;";
+   		statement.executeUpdate(sql);
+   		
   		sql = "DROP TABLE IF EXISTS `younet_me`.`engine4_related_user`;";
    		statement.executeUpdate(sql);
 			
@@ -117,6 +129,7 @@ public class UserRank {
   	private void createTableUserRank() throws SQLException { 
   		String sql = "CREATE TABLE IF NOT EXISTS `younet_me`.`engine4_user_rank` ("
 		  				+" `id` int(11) NOT NULL,"
+		  				+" `username` varchar(128) NOT NULL,"
 		  				+" `value` double DEFAULT NULL,"
 						+" `number_related_users` int(11) DEFAULT NULL,"
 						+" `none_like` tinyint(1) DEFAULT NULL,"
@@ -126,17 +139,32 @@ public class UserRank {
 		statement.executeUpdate(sql);		
   	}
   	
-  	private void createTableRelatedUser() throws SQLException {
-  		String sql = "CREATE TABLE IF NOT EXISTS `engine4_related_user` ("
+  	private void createTableFullRelatedUser() throws SQLException {
+  		String sql = "CREATE TABLE IF NOT EXISTS `engine4_full_related_user` ("
 					  +"`id` int(11) NOT NULL,"
 					  +"`owner_id` int(11) DEFAULT NULL,"
 					  +"`poster_id` int(11) DEFAULT NULL,"
+					  +"`related_weight` double DEFAULT 0,"
+					  +"`action_weight` double DEFAULT 0,"
 					  +"`action_date` datetime DEFAULT NULL,"
 					  +"`delta_date` int(11) DEFAULT NULL,"
 					  +"`delta_month` int(11) DEFAULT NULL,"
 					  +"`weight_by_12_month` int(11) DEFAULT 0,"
 					  +"`total_weight` int(11) DEFAULT 0,"					  
-					  +"`weight` double DEFAULT 0,"
+					  +"`one_edge_weight` double DEFAULT 0,"
+					  +"PRIMARY KEY (`id`)"
+					  +") ENGINE=MyISAM DEFAULT CHARSET=latin1;";
+		statement.executeUpdate(sql);		
+  	}
+  	
+  	private void createTableRelatedUser() throws SQLException {
+  		String sql = "CREATE TABLE IF NOT EXISTS `engine4_related_user` ("
+					  +"`id` int(11) NOT NULL,"
+					  +"`owner_id` int(11) DEFAULT NULL,"
+					  +"`poster_id` int(11) DEFAULT NULL,"	
+					  +"`edge_rank` double DEFAULT 0,"
+					  +"`total_edge_rank_from_poster` double DEFAULT 0,"
+					  +"`edge_weight` double DEFAULT 0,"
 					  +"PRIMARY KEY (`id`)"
 					  +") ENGINE=MyISAM DEFAULT CHARSET=latin1;";
 		statement.executeUpdate(sql);		
@@ -191,8 +219,15 @@ public class UserRank {
   		// set default value of none like column	
   		int number_user = getNumberUser();
 	  	for (int i = 1; i <= number_user; i++) {
-	    	String sql = "INSERT IGNORE INTO `younet_me`.`engine4_user_rank` (id, none_like) VALUES("+ i +",0)";
-			statement.executeUpdate(sql);		
+	  		String sql1 = "Select username from younet_me.engine4_users where user_id = " + i;
+	  		
+	  		Statement stmt = connect.createStatement();
+	  		resultSet = stmt.executeQuery(sql1);
+	  		resultSet.next();
+	  		String username = resultSet.getString("username");
+	  		
+	    	String sql = "INSERT IGNORE INTO `younet_me`.`engine4_user_rank` (id, username, none_like) VALUES("+ i +", '"+ username +"',0)";
+	    	statement.executeUpdate(sql);		
 	    }
 	  	
 	  	this.initNumberFriendsToTableUserRank();
@@ -218,9 +253,109 @@ public class UserRank {
   	}
   	
   	private void initTableRelatedUser() throws SQLException, ParseException {
-  		  	
-	  	String sql = "Select * from ("
-	  				+"	(Select subject_id as owner_id, poster_id, date as action_date" 
+  		int i = 1;
+  		SimpleDateFormat formater=new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+	    long curentTime=formater.parse("2012-4-1 00:00:00").getTime();
+
+	    //System.out.println(Math.abs((d1-d2)/(1000*60*60*24)));
+	    
+	    Calendar cal = Calendar.getInstance();
+	    int currentYear = 2012;
+	    int currentMonth = 4;
+	    int base_weight = 12;
+	    
+  		Statement stmt = connect.createStatement();
+	  	String sql;
+	  	
+	  	if (useActionLike) {
+		  	sql = "Select * from ("
+		  				+"	(Select subject_id as owner_id, poster_id, date as action_date" 
+		  				 +"	from younet_me.engine4_activity_likes INNER JOIN younet_me.engine4_activity_actions "
+		  				 +"	ON action_id = resource_id)"
+		  				+" UNION"
+		  				+" (Select subject_id as owner_id, poster_id, date as action_date"
+		  				+"	from "
+						+"	(Select t1.resource_id, t2.poster_id from younet_me.engine4_activity_comments  as t1 INNER JOIN (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2 "
+						+"	On t1.comment_id = t2.resource_id and t2.resource_type = 'activity_comment') as a1 inner join younet_me.engine4_activity_actions on a1.resource_id = action_id)"
+						+"	UNION"
+						+"	(Select owner_id, poster_id, t1.creation_date as action_date from younet_me.engine4_album_albums  as t1 INNER JOIN (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2"
+						+"		On t1.album_id = t2.resource_id and t2.resource_type = 'advalbum_album') "
+						+"	UNION"
+						+"	(Select owner_id, poster_id, t1.creation_date as action_date from younet_me.engine4_album_photos  as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2"
+						+"		On t1.photo_id = t2.resource_id and t2.resource_type = 'advalbum_photo')"
+						+"	UNION"
+						+"	(Select owner_id, poster_id, t1.creation_date as action_date from younet_me.engine4_blog_blogs  as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2"
+						+"		On t1.blog_id = t2.resource_id and t2.resource_type = 'blog')"
+						+"	UNION"
+						+"	(Select t1.poster_id as owner_id, t2.poster_id, t1.creation_date as action_date from younet_me.engine4_core_comments  as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2"
+						+"		On t1.comment_id = t2.resource_id and t2.resource_type = 'core_comment')"
+						+"	UNION"
+						+"	(Select t1.user_id as owner_id, poster_id, t1.creation_date as action_date from  younet_me.engine4_poll_polls as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2"
+						+"		On t1.poll_id = t2.resource_id and t2.resource_type = 'poll')"
+						+"	UNION"
+						+"	(Select owner_id, poster_id, t1.creation_date as action_date from  younet_me.engine4_video_videos as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2"
+						+"		On t1.video_id = t2.resource_id and t2.resource_type = 'video')"
+						
+						+"	ORDER BY owner_id, poster_id, action_date DESC"
+						+")	as relatedUser";
+			
+	  		
+	  		resultSet = statement.executeQuery(sql);		
+		    //java.util.Date action_time = new java.util.Date();
+		    //SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+		    //String currentTime = sdf.format(action_time);
+	
+	 		
+		    
+			while ( resultSet.next() ) {
+				
+				int owner_id = resultSet.getInt("owner_id");
+				int poster_id = resultSet.getInt("poster_id");
+				String actionDate = resultSet.getString("action_date");
+			    long actionTime=formater.parse(actionDate).getTime();
+				//Date myDate = new Date(actionTime);	
+				//System.out.println(myDate.toString());
+				//int diffMonth = 2012-myDate.getYear();
+				//System.out.println("diffMonth " + myDate.getYear());
+			    
+			    
+			    cal.setTimeInMillis(actionTime);
+			    int myYear = cal.get( Calendar.YEAR );
+			    int myMonth = cal.get( Calendar.MONTH ) + 1;
+			    int delta_month = (currentYear-myYear)*12 + (currentMonth - myMonth);
+			    int weight_by_12_month = base_weight - delta_month;
+			    if (weight_by_12_month < 0) {
+			    	weight_by_12_month = 0;
+			    }
+			   
+			    long delta_date = Math.abs((curentTime-actionTime)/(1000*60*60*24));
+			    
+			    double related_weight = friend_related;
+			    double action_weight = action_like;
+			    double one_edge_rank = related_weight * action_weight / delta_date; // time decay is month
+			    
+				sql = "INSERT IGNORE INTO `younet_me`.`engine4_full_related_user` (id, owner_id, poster_id, related_weight, action_weight, action_date, delta_date, delta_month, weight_by_12_month, one_edge_weight) VALUES("
+																												+ i +", "
+																												+owner_id+", "
+																												+poster_id+", "
+																												+related_weight+", "
+																												+action_weight+", '"
+																												+actionDate+"',"
+																												+delta_date+", "
+																												+delta_month+", "
+																												+weight_by_12_month+", "
+																												+one_edge_rank +" )";
+				stmt.executeUpdate(sql);	
+					
+				i++;
+			}
+	  	}
+	  	if (useActionComment) {
+		
+			// Calculate comment
+			sql = "Select * from ("
+	/*
+					+"	(Select subject_id as owner_id, poster_id, date as action_date" 
 	  				 +"	from younet_me.engine4_activity_likes INNER JOIN younet_me.engine4_activity_actions "
 	  				 +"	ON action_id = resource_id)"
 	  				+" UNION"
@@ -246,8 +381,116 @@ public class UserRank {
 					+"	UNION"
 					+"	(Select owner_id, poster_id, t1.creation_date as action_date from  younet_me.engine4_video_videos as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2"
 					+"		On t1.video_id = t2.resource_id and t2.resource_type = 'video')"
-
+	
 					+"	UNION"	
+	*/				
+					+"	(Select subject_id as owner_id, poster_id, date as action_date" 
+					+"		from younet_me.engine4_activity_comments INNER JOIN younet_me.engine4_activity_actions" 
+					+"		ON action_id = resource_id)"
+					+"	UNION"
+					+"	(Select owner_id, poster_id, t1.creation_date as action_date from younet_me.engine4_album_albums  as t1 INNER JOIN (Select resource_type, resource_id, poster_id from younet_me.engine4_core_comments, younet_me.engine4_user_rank where id = poster_id) as t2"
+					+"		On t1.album_id = t2.resource_id and t2.resource_type = 'advalbum_album') "
+					+"	UNION"
+					+"	(Select owner_id, poster_id, t1.creation_date as action_date from younet_me.engine4_album_photos  as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_comments, younet_me.engine4_user_rank where id = poster_id) as t2"
+					+"		On t1.photo_id = t2.resource_id and t2.resource_type = 'advalbum_photo')"
+					+" UNION"
+					+"	(Select user_id as owner_id, poster_id, t1.creation_date as action_date from younet_me.engine4_group_photos  as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_comments, younet_me.engine4_user_rank where id = poster_id) as t2"
+					+"		On t1.photo_id = t2.resource_id and t2.resource_type = 'advgroup_photo')"
+					+"	UNION"
+					+"	(Select owner_id, poster_id, t1.creation_date as action_date from younet_me.engine4_blog_blogs  as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_comments, younet_me.engine4_user_rank where id = poster_id) as t2"
+					+"		On t1.blog_id = t2.resource_id and t2.resource_type = 'blog')"
+					+"	UNION"
+					+"	(Select t1.user_id as owner_id, poster_id, t1.creation_date as action_date from  younet_me.engine4_poll_polls as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_comments, younet_me.engine4_user_rank where id = poster_id) as t2"
+					+"		On t1.poll_id = t2.resource_id and t2.resource_type = 'poll')"
+					+"	UNION"
+					+"	(Select owner_id, poster_id, t1.creation_date as action_date from  younet_me.engine4_video_videos as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_comments, younet_me.engine4_user_rank where id = poster_id) as t2"
+					+"		On t1.video_id = t2.resource_id and t2.resource_type = 'video')	"
+	/*				
+					+"	UNION"
+					+" (SELECT object_id as owner_id, subject_id as poster_id, date as action_date FROM younet_me.engine4_activity_actions where type='post' and object_type ='user')"
+	*/					
+					+"	ORDER BY owner_id, poster_id, action_date DESC"
+					+")	as relatedUser";
+	  		  	
+	
+			resultSet = statement.executeQuery(sql);		
+	  
+			while ( resultSet.next() ) {
+				
+				int owner_id = resultSet.getInt("owner_id");
+				int poster_id = resultSet.getInt("poster_id");
+				String actionDate = resultSet.getString("action_date");
+			    long actionTime=formater.parse(actionDate).getTime();
+				//Date myDate = new Date(actionTime);	
+				//System.out.println(myDate.toString());
+				//int diffMonth = 2012-myDate.getYear();
+				//System.out.println("diffMonth " + myDate.getYear());
+			    
+			    cal.setTimeInMillis(actionTime);
+			    int myYear = cal.get( Calendar.YEAR );
+			    int myMonth = cal.get( Calendar.MONTH ) + 1;
+			    int delta_month = (currentYear-myYear)*12 + (currentMonth - myMonth);
+			    int weight_by_12_month = base_weight - delta_month;
+			    if (weight_by_12_month < 0) {
+			    	weight_by_12_month = 0;
+			    }
+			    
+			    long delta_date = Math.abs((curentTime-actionTime)/(1000*60*60*24));
+	
+			    double related_weight = friend_related;
+			    double action_weight = action_comment;
+			    double one_edge_rank = related_weight * action_weight / delta_date; // time decay is month
+			    
+				sql = "INSERT IGNORE INTO `younet_me`.`engine4_full_related_user` (id, owner_id, poster_id, related_weight, action_weight, action_date, delta_date, delta_month, weight_by_12_month, one_edge_weight) VALUES("
+																												+ i +", "
+																												+owner_id+", "
+																												+poster_id+", "
+																												+related_weight+", "
+																												+action_weight+", '"
+																												+actionDate+"',"
+																												+delta_date+", "
+																												+delta_month+", "
+																												+weight_by_12_month+", "
+																												+one_edge_rank +" )";
+				stmt.executeUpdate(sql);	
+					
+				i++;
+			}
+	  	}
+		
+	  	if (useActionWallPost) {
+			// Calculate wall post
+			sql = "Select * from ("
+	/*
+					+"	(Select subject_id as owner_id, poster_id, date as action_date" 
+	  				 +"	from younet_me.engine4_activity_likes INNER JOIN younet_me.engine4_activity_actions "
+	  				 +"	ON action_id = resource_id)"
+	  				+" UNION"
+	  				+" (Select subject_id as owner_id, poster_id, date as action_date"
+	  				+"	from "
+					+"	(Select t1.resource_id, t2.poster_id from younet_me.engine4_activity_comments  as t1 INNER JOIN (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2 "
+					+"	On t1.comment_id = t2.resource_id and t2.resource_type = 'activity_comment') as a1 inner join younet_me.engine4_activity_actions on a1.resource_id = action_id)"
+					+"	UNION"
+					+"	(Select owner_id, poster_id, t1.creation_date as action_date from younet_me.engine4_album_albums  as t1 INNER JOIN (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2"
+					+"		On t1.album_id = t2.resource_id and t2.resource_type = 'advalbum_album') "
+					+"	UNION"
+					+"	(Select owner_id, poster_id, t1.creation_date as action_date from younet_me.engine4_album_photos  as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2"
+					+"		On t1.photo_id = t2.resource_id and t2.resource_type = 'advalbum_photo')"
+					+"	UNION"
+					+"	(Select owner_id, poster_id, t1.creation_date as action_date from younet_me.engine4_blog_blogs  as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2"
+					+"		On t1.blog_id = t2.resource_id and t2.resource_type = 'blog')"
+					+"	UNION"
+					+"	(Select t1.poster_id as owner_id, t2.poster_id, t1.creation_date as action_date from younet_me.engine4_core_comments  as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2"
+					+"		On t1.comment_id = t2.resource_id and t2.resource_type = 'core_comment')"
+					+"	UNION"
+					+"	(Select t1.user_id as owner_id, poster_id, t1.creation_date as action_date from  younet_me.engine4_poll_polls as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2"
+					+"		On t1.poll_id = t2.resource_id and t2.resource_type = 'poll')"
+					+"	UNION"
+					+"	(Select owner_id, poster_id, t1.creation_date as action_date from  younet_me.engine4_video_videos as t1 INNER JOIN  (Select resource_type, resource_id, poster_id from younet_me.engine4_core_likes, younet_me.engine4_user_rank where id = poster_id) as t2"
+					+"		On t1.video_id = t2.resource_id and t2.resource_type = 'video')"
+	
+					+"	UNION"	
+					
 					+"	(Select subject_id as owner_id, poster_id, date as action_date" 
 					+"		from younet_me.engine4_activity_comments INNER JOIN younet_me.engine4_activity_actions" 
 					+"		ON action_id = resource_id)"
@@ -271,97 +514,116 @@ public class UserRank {
 					+"		On t1.video_id = t2.resource_id and t2.resource_type = 'video')	"
 					
 					+"	UNION"
+	*/				
 					+" (SELECT object_id as owner_id, subject_id as poster_id, date as action_date FROM younet_me.engine4_activity_actions where type='post' and object_type ='user')"
-					
+						
 					+"	ORDER BY owner_id, poster_id, action_date DESC"
-					+")	as relatedUser Group by owner_id, poster_id";
+					+")	as relatedUser";
+	//				+" Group by owner_id, poster_id";
 	  		  	
-  		int i = 1;
+	
+			resultSet = statement.executeQuery(sql);		
+	  
+			while ( resultSet.next() ) {
+				
+				int owner_id = resultSet.getInt("owner_id");
+				int poster_id = resultSet.getInt("poster_id");
+				String actionDate = resultSet.getString("action_date");
+			    long actionTime=formater.parse(actionDate).getTime();
+				//Date myDate = new Date(actionTime);	
+				//System.out.println(myDate.toString());
+				//int diffMonth = 2012-myDate.getYear();
+				//System.out.println("diffMonth " + myDate.getYear());
+			    
+			    cal.setTimeInMillis(actionTime);
+			    int myYear = cal.get( Calendar.YEAR );
+			    int myMonth = cal.get( Calendar.MONTH ) + 1;
+			    int delta_month = (currentYear-myYear)*12 + (currentMonth - myMonth);
+			    int weight_by_12_month = base_weight - delta_month;
+			    if (weight_by_12_month < 0) {
+			    	weight_by_12_month = 0;
+			    }
+			    
+			    long delta_date = Math.abs((curentTime-actionTime)/(1000*60*60*24));
+	
+			    double related_weight = friend_related;
+			    double action_weight = action_post_wall;
+			    double one_edge_rank = related_weight * action_weight / delta_date; // time decay is month
+			    
+				sql = "INSERT IGNORE INTO `younet_me`.`engine4_full_related_user` (id, owner_id, poster_id, related_weight, action_weight, action_date, delta_date, delta_month, weight_by_12_month, one_edge_weight) VALUES("
+																												+ i +", "
+																												+owner_id+", "
+																												+poster_id+", "
+																												+related_weight+", "
+																												+action_weight+", '"
+																												+actionDate+"',"
+																												+delta_date+", "
+																												+delta_month+", "
+																												+weight_by_12_month+", "
+																												+one_edge_rank +" )";
+				stmt.executeUpdate(sql);	
+					
+				i++;
+			}
+	  	}
+	  	
+		// remove noise
+		this.removeRelatedThemSelves();
 		
-  		
-  		resultSet = statement.executeQuery(sql);		
-	    //java.util.Date action_time = new java.util.Date();
-	    //SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-	    //String currentTime = sdf.format(action_time);
-	    
-	    SimpleDateFormat formater=new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-	    long curentTime=formater.parse("2012-4-1 00:00:00").getTime();
-
-	    //System.out.println(Math.abs((d1-d2)/(1000*60*60*24)));
-	    
-	    Calendar cal = Calendar.getInstance();
-	    int currentYear = 2012;
-	    int currentMonth = 4;
-	    int base_weight = 12;
-	    
-  		Statement stmt = connect.createStatement();
+		// sum all one edge weight
+		sql = "SELECT owner_id, poster_id, sum(one_edge_weight) as edge_rank FROM younet_me.engine4_full_related_user"
+				+" group by owner_id, poster_id";
+		
+		i = 1;
+		resultSet = statement.executeQuery(sql);
 		while ( resultSet.next() ) {
-			
 			int owner_id = resultSet.getInt("owner_id");
 			int poster_id = resultSet.getInt("poster_id");
-			String actionDate = resultSet.getString("action_date");
-		    long actionTime=formater.parse(actionDate).getTime();
-			//Date myDate = new Date(actionTime);	
-			//System.out.println(myDate.toString());
-			//int diffMonth = 2012-myDate.getYear();
-			//System.out.println("diffMonth " + myDate.getYear());
-		    
-		    
-		    cal.setTimeInMillis(actionTime);
-		    int myYear = cal.get( Calendar.YEAR );
-		    int myMonth = cal.get( Calendar.MONTH ) + 1;
-		    int delta_month = (currentYear-myYear)*12 + (currentMonth - myMonth);
-		    int weight_by_12_month = base_weight - delta_month;
-		    if (weight_by_12_month < 0) {
-		    	weight_by_12_month = 0;
-		    }
-		    int weight = weight_by_12_month; // use weight_by_12_month
-		    long delta_date = Math.abs((curentTime-actionTime)/(1000*60*60*24));
-			sql = "INSERT IGNORE INTO `younet_me`.`engine4_related_user` (id, owner_id, poster_id, action_date, delta_date, delta_month, weight_by_12_month, weight) VALUES("+ i +", "
-																											+owner_id+", "
-																											+poster_id+", '"
-																											+actionDate+"',"
-																											+delta_date+", "
-																											+delta_month+", "
-																											+weight_by_12_month+", "
-																											+weight +" )";
-			stmt.executeUpdate(sql);	
-				
+			double edge_rank = resultSet.getDouble("edge_rank");
+			
+			sql = "INSERT IGNORE INTO `younet_me`.`engine4_related_user` (id, owner_id, poster_id, edge_rank) VALUES("
+					+ i +", "
+					+owner_id+", "
+					+poster_id+", "
+					+edge_rank +" )";
+			stmt.executeUpdate(sql);
+			
 			i++;
 		}
 		
-		// calculate total weight
+ 		
+		// calculate total_edge_rank_from_poster
 		sql = "SELECT poster_id FROM younet_me.engine4_related_user group by poster_id";
 		resultSet = statement.executeQuery(sql);
   		Statement stmt2 = connect.createStatement();		
 		while ( resultSet.next() ) {
 			int poster_id = resultSet.getInt("poster_id");
 			
-			String sql1 = "SELECT weight FROM younet_me.engine4_related_user where poster_id = " + poster_id;
+			String sql1 = "SELECT edge_rank FROM younet_me.engine4_related_user where poster_id = " + poster_id;
 			ResultSet resultSet1 = stmt.executeQuery(sql1);	
-			int total_weight = 0;
+			double total_edge_rank_from_poster = 0;
 			while ( resultSet1.next() ) {
-				int weight = resultSet1.getInt("weight");
-				total_weight += weight;
+				double weight = resultSet1.getDouble("edge_rank");
+				total_edge_rank_from_poster += weight;
 			}
 			
-			String sql2 = "UPDATE younet_me.engine4_related_user SET `total_weight`=" + total_weight + " WHERE `poster_id`="+poster_id;
+			String sql2 = "UPDATE younet_me.engine4_related_user SET `total_edge_rank_from_poster`=" + total_edge_rank_from_poster + " WHERE `poster_id`="+poster_id;
 			stmt2.executeUpdate(sql2);
 		}
 		
 		
-		// calculate weight
-		sql = "SELECT id, weight, total_weight FROM younet_me.engine4_related_user";
+		// calculate edge_weight
+		sql = "SELECT id, edge_rank, total_edge_rank_from_poster FROM younet_me.engine4_related_user";
 		resultSet = statement.executeQuery(sql);
 		while ( resultSet.next() ) {
 			int id = resultSet.getInt("id");
-			double total_weight = resultSet.getInt("total_weight");
-			double weight = resultSet.getInt("weight");
+			double total_edge_rank_from_poster = resultSet.getDouble("total_edge_rank_from_poster");
+			double edge_rank = resultSet.getDouble("edge_rank");
 			
-			if (total_weight == 0) {
-				sql = "UPDATE younet_me.engine4_related_user SET `weight`=0 WHERE `id`="+id;
+			if (total_edge_rank_from_poster == 0) {
+				sql = "UPDATE younet_me.engine4_related_user SET `edge_weight`=0 WHERE `id`="+id;
 			} else{
-				sql = "UPDATE younet_me.engine4_related_user SET `weight`=" + weight/total_weight + " WHERE `id`="+id;
+				sql = "UPDATE younet_me.engine4_related_user SET `edge_weight`=" + edge_rank/total_edge_rank_from_poster + " WHERE `id`="+id;
 			}
 			
 			
@@ -437,7 +699,7 @@ public class UserRank {
 	    	statement.executeUpdate(sql2);
 	    	
 	    	// modify here to change weight
-	    	String sql1 = "select poster_id, weight  from younet_me.engine4_related_user where owner_id = "+owner_id;
+	    	String sql1 = "select poster_id, edge_weight  from younet_me.engine4_related_user where owner_id = "+owner_id;
 	    	
 	    	
 	    	// set value of B colum is 0 in SOLE Ax = B
@@ -449,7 +711,7 @@ public class UserRank {
 	    	while ( resultSet.next() ) { 
 	    		int none_like = 1;
 		    	int poster_id = resultSet.getInt("poster_id");
-		    	double weight = resultSet.getDouble("weight");
+		    	double edge_weight = resultSet.getDouble("edge_weight");
 		    	String sql3 = "Select none_like, number_related_users from younet_me.engine4_user_rank where id="+poster_id;
 		    		
 		    	int number_related_users = 1; // not set 0 because divide by zero
@@ -462,9 +724,11 @@ public class UserRank {
 		    		B_value += value / number_related_users;    	
 		    		//echo "B: $B_value <br/>";		
 		    	} else {
-		    		//String sql4 = "UPDATE engine4_sole SET `user_"+poster_id+"`= -1/"+number_related_users+" WHERE `id`="+i; // not use weight
-		    		String sql4 = "UPDATE engine4_sole SET `user_"+poster_id+"`= " +weight+ "* -1/"+number_related_users+" WHERE `id`="+i;		    		
-		    		
+		    		String sql4 = "UPDATE engine4_sole SET `user_"+poster_id+"`= -1/"+number_related_users+" WHERE `id`="+i; // not use weight
+
+		    		if (useTimeDecay) {
+		    			sql4 = "UPDATE engine4_sole SET `user_"+poster_id+"`= " +edge_weight+ "* -1/"+number_related_users+" WHERE `id`="+i;		    		
+		    		}
 		    		Statement stmt2 = connect.createStatement();
 		    			
 		    		stmt2.executeUpdate(sql4);
@@ -518,7 +782,7 @@ public class UserRank {
   	 * @throws SQLException 
   	 */
   	private void removeRelatedThemSelves() throws SQLException {
-	    String sql = "DELETE FROM `younet_me`.`engine4_related_user` WHERE `owner_id`=`poster_id`";
+	    String sql = "DELETE FROM `younet_me`.`engine4_full_related_user` WHERE `owner_id`=`poster_id`";
   		statement.executeUpdate(sql);		
   	}
   	
@@ -680,7 +944,7 @@ public class UserRank {
 	private double getCurrentTime() {
 		double time = 0;
 		Date date = new Date();
-		time = date.getTime() / 1000;
+		time = date.getTime();
 		return time;
 	}
 	
