@@ -32,7 +32,7 @@ public class Main extends Frame implements ActionListener, WindowListener {
 	private Checkbox cbActionWallPost;		
 	private Label lblActionWallPostWeight;    
 	private TextField tfActionWallPostWeight; 
-	private Checkbox cbUseTimeDecay;
+	private Checkbox cbUseEdgeRank;
 	private Label lblTotalTime; 
 
 	
@@ -49,10 +49,11 @@ public class Main extends Frame implements ActionListener, WindowListener {
 		ur.useActionLike = cbActionLike.getState();
 		ur.useActionComment = cbActionComment.getState();
 		ur.useActionWallPost = cbActionWallPost.getState();
-		ur.useTimeDecay = cbUseTimeDecay.getState();
+		ur.useEdgeRank = cbUseEdgeRank.getState();
 		
 		if ( !( cbActionLike.getState() || cbActionComment.getState() || cbActionWallPost.getState() ) ) {
 			System.out.println("stop");
+			lblwarning.setText("You must choose at least 1 action!!!");
 			lblwarning.setVisible(true);
 			return;
 		} else {
@@ -62,6 +63,12 @@ public class Main extends Frame implements ActionListener, WindowListener {
 			ur.action_comment = Double.parseDouble(tfActionCommentWeight.getText());
 			ur.action_post_wall = Double.parseDouble(tfActionWallPostWeight.getText());
 
+			if ( (ur.action_like * ur.action_comment * ur.action_post_wall ) == 0 ) {
+				lblwarning.setText("At least 1 weight must different 0.");				
+				lblwarning.setVisible(true);
+				return;
+			}
+			
 			try {
 				ur.execute();
 				String resultTotalTime = "Total time: " + ur.total_time + " miliseconds";
@@ -86,7 +93,7 @@ public class Main extends Frame implements ActionListener, WindowListener {
 		setLayout(new GridLayout(10, 2, 0, 0)); // "this" Frame sets to BorderLayout
 		
 		Panel panelWaringLabel = new Panel( new FlowLayout( FlowLayout.LEFT ) );
-		lblwarning = new Label("You must choose at least 1 action!!!");
+		lblwarning = new Label("At least 1 weight must different 0.");
 		panelWaringLabel.add(lblwarning);
 		add(panelWaringLabel);
 		//lblwarning.setVisible(false);
@@ -152,9 +159,9 @@ public class Main extends Frame implements ActionListener, WindowListener {
 		add(panelTfActionWallPost);
 		
 		Panel panelUseTimeDecayCheckBox = new Panel( new FlowLayout( FlowLayout.LEFT ) );
-		cbUseTimeDecay = new Checkbox("Use time decay", false);
-		cbUseTimeDecay.setState(true);				
-		panelUseTimeDecayCheckBox.add(cbUseTimeDecay);
+		cbUseEdgeRank = new Checkbox("Use EdgeRank", false);
+		cbUseEdgeRank.setState(true);				
+		panelUseTimeDecayCheckBox.add(cbUseEdgeRank);
 		add(panelUseTimeDecayCheckBox);
 		
 		Panel rightPanelUseTimeDecayCheckBox = new Panel( new FlowLayout( FlowLayout.LEFT ) );

@@ -23,7 +23,7 @@ public class UserRank {
 	public boolean useActionLike = true;
 	public boolean useActionComment = true;
 	public boolean useActionWallPost = true;
-	public boolean useTimeDecay = true;
+	public boolean useEdgeRank = true;
 	
 	public double total_time = 0;
 	
@@ -726,7 +726,7 @@ public class UserRank {
 		    	} else {
 		    		String sql4 = "UPDATE engine4_sole SET `user_"+poster_id+"`= -1/"+number_related_users+" WHERE `id`="+i; // not use weight
 
-		    		if (useTimeDecay) {
+		    		if (useEdgeRank) {
 		    			sql4 = "UPDATE engine4_sole SET `user_"+poster_id+"`= " +edge_weight+ "* -1/"+number_related_users+" WHERE `id`="+i;		    		
 		    		}
 		    		Statement stmt2 = connect.createStatement();
